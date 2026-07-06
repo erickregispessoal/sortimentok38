@@ -1,0 +1,1136 @@
+const GOOGLE_SHEETS_API_URL = 'https://script.google.com/macros/s/AKfycbzNn1Wtw-S-sT5CkDHUqockBkqcuEqiN_Ci_879fQYSSlLXU42nxunOnKUknKx776L0tw/exec';
+const USAR_GOOGLE_SHEETS = true;
+// ====== LOGIN ======
+const USUARIO_CORRETO = 'GERENCIA38';
+const SENHA_CORRETA = '123456';
+
+function fazerLogin() {
+    const usuario = document.getElementById('login-usuario').value.trim();
+    const senha = document.getElementById('login-senha').value.trim();
+    const erroEl = document.getElementById('login-erro');
+    
+    if (usuario === USUARIO_CORRETO && senha === SENHA_CORRETA) {
+        // Login correto - esconder tela de login
+        document.getElementById('login-screen').classList.add('hidden');
+        document.querySelector('.app-container').style.display = 'flex';
+        
+        // Salvar sessão
+        localStorage.setItem('auditsort38_logado', 'true');
+        
+        showToast('Bem-vindo à Loja 38! 🏪');
+    } else {
+        // Login incorreto
+        erroEl.classList.remove('hidden');
+        document.getElementById('login-senha').value = '';
+        
+        // Esconder erro após 3 segundos
+        setTimeout(() => {
+            erroEl.classList.add('hidden');
+        }, 3000);
+    }
+}
+
+// Verificar se já está logado ao carregar a página
+function verificarLogin() {
+    const logado = localStorage.getItem('auditsort38_logado');
+    
+    if (logado === 'true') {
+        document.getElementById('login-screen').classList.add('hidden');
+        document.querySelector('.app-container').style.display = 'flex';
+    } else {
+        document.getElementById('login-screen').classList.remove('hidden');
+        document.querySelector('.app-container').style.display = 'none';
+    }
+}
+// Banco de dados
+let appData = JSON.parse(localStorage.getItem('auditsort38_v2_data')) || {
+    audits: [],
+    config: {
+        auditores: ['Auditor Principal', 'Coordenação Loja 38', 'Auditor Setorial'],
+        setores: ['Mercearia', 'Frios e Laticínios', 'Hortifruti', 'Açougue e Peixaria', 'Bazar e Têxtil', 'Padaria'],
+        metaLoja: 98.0
+    }
+};
+
+let charts = {};
+let currentCalendarDate = new Date();
+let sincronizado = false;
+
+// ====== INICIAR SISTEMA ======
+document.addEventListener('DOMContentLoaded', async () => {
+    verificarLogin();
+
+    updateLiveClock();
+    setInterval(updateLiveClock, 1000);
+    setAutomaticGreeting();
+    resetFormDateTime();
+    populateSelectOptions();
+    renderConfigLists();
+    
+    if (USAR_GOOGLE_SHEETS) {
+        await carregarDadosNuvem();
+    }
+    
+    updateGlobalMetrics();
+    renderHomeChart();
+    navigate('home');
+});
+
+// ====== GOOGLE SHEETS ======
+async function carregarDadosNuvem() {
+    try {
+        showToast('Sincronizando...');
+        const response = await fetch(GOOGLE_SHEETS_API_URL);
+        const dadosNuvem = await response.json();
+        
+        if (dadosNuvem && dadosNuvem.length > 0) {
+            appData.audits = dadosNuvem.map(a => ({ ...a, data: normalizarData(a.data) }));
+            saveToLocalStorage();
+            sincronizado = true;
+            showToast('Dados sincronizados!');
+        }
+    } catch (error) {
+        console.error('Erro ao carregar:', error);
+        sincronizado = false;
+    }
+}
+
+async function salvarNaPlanilha(auditsArray) {
+    if (!USAR_GOOGLE_SHEETS) return;
+    
+    try {
+        await fetch(GOOGLE_SHEETS_API_URL, {
+            method: 'POST',
+            body: JSON.stringify(auditsArray)
+        });
+        sincronizado = true;
+    } catch (error) {
+        console.error('Erro ao salvar:', error);
+        sincronizado = false;
+    }
+}
+
+async function deletarDaPlanilha(id) {
+    if (!USAR_GOOGLE_SHEETS) return;
+    
+    try {
+        const response = await fetch(`${GOOGLE_SHEETS_API_URL}?action=delete&id=${id}`);
+        const result = await response.json();
+        console.log('Excluído da planilha:', result);
+    } catch (error) {
+        console.error('Erro ao deletar:', error);
+    }
+}
+
+// ====== RELÓGIO E SAUDAÇÃO ======
+function updateLiveClock() {
+    const el = document.getElementById('current-date-time');
+    if (el) el.innerText = new Date().toLocaleString('pt-BR');
+}
+
+function setAutomaticGreeting() {
+    const hr = new Date().getHours();
+    let greet = 'Bom dia!';
+    if (hr >= 12 && hr < 18) greet = 'Boa tarde!';
+    else if (hr >= 18) greet = 'Boa noite!';
+    
+    const el = document.getElementById('greeting');
+    if (el) el.innerText = `${greet} Gestão Loja 38.`;
+}
+
+function resetFormDateTime() {
+    const now = new Date();
+    const dInput = document.getElementById('form-data');
+    const hInput = document.getElementById('form-hora');
+    if (dInput) dInput.value = now.toISOString().split('T')[0];
+    if (hInput) hInput.value = now.toTimeString().substring(0, 5);
+}
+
+// ====== TOAST ======
+function showToast(msg, isDanger = false) {
+    const t = document.getElementById('toast');
+    if (!t) return;
+    t.innerText = msg;
+    t.style.backgroundColor = isDanger ? '#DC3545' : '#174A7C';
+    t.classList.remove('hidden');
+    setTimeout(() => t.classList.add('hidden'), 3000);
+}
+
+// ====== UTILITÁRIO DE DATA ======
+// Garante formato YYYY-MM-DD mesmo que a data venha com hora/timezone (ex: do Google Sheets)
+function normalizarData(valor) {
+    if (!valor) return '';
+    const match = String(valor).match(/(\d{4})-(\d{2})-(\d{2})/);
+    return match ? `${match[1]}-${match[2]}-${match[3]}` : String(valor);
+}
+
+function formatarDataBR(valor) {
+    const iso = normalizarData(valor);
+    if (!iso) return '-';
+    return iso.split('-').reverse().join('/');
+}
+
+// ====== NAVEGAÇÃO ======
+function navigate(pageId) {
+    document.querySelectorAll('.page-section').forEach(sec => sec.classList.add('hidden'));
+    
+    const target = document.getElementById(pageId);
+    if (target) target.classList.remove('hidden');
+    
+    document.querySelectorAll('.menu button').forEach(btn => btn.classList.remove('active'));
+    
+    const activeBtn = document.getElementById(`btn-${pageId}`);
+    if (activeBtn) activeBtn.classList.add('active');
+    
+    const titles = {
+        'home': 'Home Hub - Loja 38',
+        'nova-auditoria': 'Lançamento de Auditoria',
+        'dashboard': 'Analytics & Dashboards',
+        'analises': 'Análises Inteligentes',
+        'calendario-view': 'Calendário Semafórico',
+        'historico': 'Histórico de Auditorias',
+        'relatorio-divisoes': 'Relatório de Divisões',
+        'configuracoes': 'Configurações'
+    };
+    
+    const titleEl = document.getElementById('page-title');
+    if (titleEl) titleEl.innerText = titles[pageId] || 'AuditSort 38';
+
+    if (pageId === 'home') {
+        updateGlobalMetrics();
+        renderHomeChart();
+    } else if (pageId === 'historico') {
+        renderHistoryTable();
+    } else if (pageId === 'dashboard') {
+        populateFilterSelects();
+        applyFilters();
+    } else if (pageId === 'analises') {
+        generateSmartAnalysis();
+    } else if (pageId === 'calendario-view') {
+        renderCalendar();
+    } else if (pageId === 'relatorio-divisoes') {
+        populateReportSetorOptions();
+        populateDivisaoFilterOptions();
+        gerarRelatorioDivisao();
+    }
+}
+
+// ====== TEMA ESCURO ======
+function toggleDarkMode() {
+    document.body.classList.toggle('dark-mode');
+    const isDark = document.body.classList.contains('dark-mode');
+    const btn = document.getElementById('btn-theme-toggle');
+    if (btn) btn.innerText = isDark ? '☀️ Modo Claro' : '🌙 Modo Escuro';
+}
+
+// ====== SALVAR DADOS ======
+function saveToLocalStorage() {
+    localStorage.setItem('auditsort38_v2_data', JSON.stringify(appData));
+    updateGlobalMetrics();
+}
+
+// ====== CONFIGURAÇÕES ======
+function populateSelectOptions() {
+    const fAuditor = document.getElementById('form-auditor');
+    const fSetor = document.getElementById('form-setor');
+    
+    if (fAuditor) {
+        fAuditor.innerHTML = '<option value="">Selecione o Auditor...</option>';
+        appData.config.auditores.forEach(a => fAuditor.innerHTML += `<option value="${a}">${a}</option>`);
+    }
+    if (fSetor) {
+        fSetor.innerHTML = '<option value="">Selecione o Setor...</option>';
+        appData.config.setores.forEach(s => fSetor.innerHTML += `<option value="${s}">${s}</option>`);
+    }
+    
+    const metaInput = document.getElementById('config-meta-loja');
+    if (metaInput) metaInput.value = appData.config.metaLoja;
+}
+
+function renderConfigLists() {
+    const listAud = document.getElementById('list-auditores');
+    const listSet = document.getElementById('list-setores');
+    
+    if (listAud) {
+        listAud.innerHTML = '';
+        appData.config.auditores.forEach(a => {
+            listAud.innerHTML += `<li>${a} <button class="btn-danger btn-sm" onclick="removeConfigItem('auditores', '${a}')">Remover</button></li>`;
+        });
+    }
+    if (listSet) {
+        listSet.innerHTML = '';
+        appData.config.setores.forEach(s => {
+            listSet.innerHTML += `<li>${s} <button class="btn-danger btn-sm" onclick="removeConfigItem('setores', '${s}')">Remover</button></li>`;
+        });
+    }
+}
+
+function addConfigItem(key, inputId) {
+    const input = document.getElementById(inputId);
+    if (!input) return;
+    
+    const val = input.value.trim();
+    if (!val) return;
+    
+    if (!appData.config[key].includes(val)) {
+        appData.config[key].push(val);
+        saveToLocalStorage();
+        renderConfigLists();
+        populateSelectOptions();
+        input.value = '';
+        showToast('Adicionado com sucesso!');
+    } else {
+        showToast('Item já existe!', true);
+    }
+}
+
+function removeConfigItem(key, val) {
+    appData.config[key] = appData.config[key].filter(item => item !== val);
+    saveToLocalStorage();
+    renderConfigLists();
+    populateSelectOptions();
+    showToast('Removido.', true);
+}
+
+function saveMetaStore() {
+    const input = document.getElementById('config-meta-loja');
+    if (!input) return;
+    
+    const val = parseFloat(input.value);
+    if (!isNaN(val) && val >= 0 && val <= 100) {
+        appData.config.metaLoja = val;
+        saveToLocalStorage();
+        showToast('Meta atualizada!');
+    }
+}
+
+// ====== FORMULÁRIO DE AUDITORIA ======
+function calculateFormMetrics() {
+    const previstos = parseInt(document.getElementById('form-previstos').value) || 0;
+    const picking = parseInt(document.getElementById('form-picking').value) || 0;
+    const deposito = parseInt(document.getElementById('form-deposito').value) || 0;
+    const areaVendas = parseInt(document.getElementById('form-areavendas').value) || 0;
+    const encontrados = picking + deposito + areaVendas;
+    const infoBox = document.getElementById('form-metricas-calculadas');
+    
+    if (!infoBox) return;
+    
+    if (previstos <= 0) {
+        infoBox.innerHTML = 'Preencha os itens previstos...';
+        return;
+    }
+    
+    if (encontrados > previstos) {
+        infoBox.innerHTML = '<span class="text-danger">Soma de encontrados (Picking + Depósito + Área de Vendas) maior que previstos!</span>';
+        return;
+    }
+    
+    const naoEncontrados = previstos - encontrados;
+    const confPerc = ((encontrados / previstos) * 100).toFixed(1);
+    const rupPerc = (100 - parseFloat(confPerc)).toFixed(1);
+    const pctPicking = ((picking / previstos) * 100).toFixed(1);
+    const pctDeposito = ((deposito / previstos) * 100).toFixed(1);
+    const pctAreaVendas = ((areaVendas / previstos) * 100).toFixed(1);
+    
+    infoBox.innerHTML = `Não encontrados: <strong>${naoEncontrados}</strong><br>` +
+                        `Conformidade: <strong class="text-success">${confPerc}%</strong> | Ruptura: <strong class="text-danger">${rupPerc}%</strong><br>` +
+                        `Picking: <strong>${pctPicking}%</strong> | Depósito: <strong>${pctDeposito}%</strong> | Área de Vendas: <strong>${pctAreaVendas}%</strong>`;
+}
+
+function clearAuditForm() {
+    const form = document.getElementById('audit-form');
+    if (form) {
+        form.reset();
+        resetFormDateTime();
+        calculateFormMetrics();
+    }
+}
+
+// Evento do formulário
+document.getElementById('audit-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    
+    const previstos = parseInt(document.getElementById('form-previstos').value) || 0;
+    const picking = parseInt(document.getElementById('form-picking').value) || 0;
+    const deposito = parseInt(document.getElementById('form-deposito').value) || 0;
+    const areaVendas = parseInt(document.getElementById('form-areavendas').value) || 0;
+    const encontrados = picking + deposito + areaVendas;
+    
+    if (previstos <= 0) {
+        showToast('Itens previstos inválido!', true);
+        return;
+    }
+    if (encontrados > previstos) {
+        showToast('Soma de encontrados não pode superar previstos!', true);
+        return;
+    }
+    
+    const naoEncontrados = previstos - encontrados;
+    const conformidade = parseFloat(((encontrados / previstos) * 100).toFixed(2));
+    const ruptura = parseFloat((100 - conformidade).toFixed(2));
+    
+    const auditObj = {
+        id: 'audit_' + Date.now(),
+        data: document.getElementById('form-data').value,
+        hora: document.getElementById('form-hora').value,
+        auditor: document.getElementById('form-auditor').value,
+        setor: document.getElementById('form-setor').value,
+        divisao: document.getElementById('form-divisao').value.trim(),
+        previstos: previstos,
+        picking: picking,
+        deposito: deposito,
+        areaVendas: areaVendas,
+        encontrados: encontrados,
+        naoEncontrados: naoEncontrados,
+        conformidade: conformidade,
+        ruptura: ruptura,
+        observacao: document.getElementById('form-observacao').value.trim()
+    };
+    
+    appData.audits.push(auditObj);
+    saveToLocalStorage();
+    await salvarNaPlanilha([auditObj]);
+    
+    showToast('Auditoria salva!');
+    clearAuditForm();
+});
+
+// ====== HOME ======
+function updateGlobalMetrics() {
+    const currentMonthStr = new Date().toISOString().substring(0, 7);
+    const currentMonthAudits = appData.audits.filter(a => a.data.startsWith(currentMonthStr));
+    
+    let totalPrevistos = 0, totalEncontrados = 0;
+    currentMonthAudits.forEach(a => {
+        totalPrevistos += a.previstos;
+        totalEncontrados += a.encontrados;
+    });
+    
+    const confMes = totalPrevistos > 0 ? ((totalEncontrados / totalPrevistos) * 100).toFixed(1) : "0.0";
+    const rupMes = totalPrevistos > 0 ? (100 - parseFloat(confMes)).toFixed(1) : "0.0";
+    
+    document.getElementById('home-conformidade').innerText = `${confMes}%`;
+    document.getElementById('home-ruptura').innerText = `${rupMes}%`;
+    document.getElementById('home-total-auditorias').innerText = currentMonthAudits.length;
+    document.getElementById('home-meta-loja').innerText = `${appData.config.metaLoja.toFixed(1)}%`;
+    
+    const ultimaBox = document.getElementById('home-ultima-auditoria');
+    if (appData.audits.length > 0) {
+        const sorted = [...appData.audits].sort((a,b) => b.id.localeCompare(a.id));
+        const last = sorted[0];
+        const dataFmt = formatarDataBR(last.data);
+        
+        ultimaBox.innerHTML = `
+            <strong>Data:</strong> ${dataFmt} às ${last.hora}<br>
+            <strong>Setor/Divisão:</strong> ${last.setor} (${last.divisao})<br>
+            <strong>Conformidade:</strong> <span class="${last.conformidade >= appData.config.metaLoja ? 'text-success' : 'text-danger'}">${last.conformidade}%</span><br>
+            <strong>Auditor:</strong> ${last.auditor}<br>
+            <small>${sincronizado ? '☁️ Online' : '💻 Offline'}</small>
+        `;
+    } else {
+        ultimaBox.innerHTML = '<p class="text-muted">Nenhuma auditoria registrada.</p>';
+    }
+}
+
+function renderHomeChart() {
+    if (charts['homeEvolucao']) charts['homeEvolucao'].destroy();
+    
+    const canvas = document.getElementById('chartHomeEvolucao');
+    if (!canvas) return;
+    
+    const agrupado = {};
+    appData.audits.forEach(a => {
+        if (!agrupado[a.data]) agrupado[a.data] = { prev: 0, enc: 0 };
+        agrupado[a.data].prev += a.previstos;
+        agrupado[a.data].enc += a.encontrados;
+    });
+    
+    const datasOrdenadas = Object.keys(agrupado).sort().slice(-10);
+    const valores = datasOrdenadas.map(d => ((agrupado[d].enc / agrupado[d].prev) * 100).toFixed(1));
+    const labels = datasOrdenadas.map(d => d.split('-').reverse().slice(0,2).join('/'));
+    
+    charts['homeEvolucao'] = new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels: labels.length ? labels : ['Sem dados'],
+            datasets: [{
+                label: 'Conformidade (%)',
+                data: valores.length ? valores : [0],
+                borderColor: '#174A7C',
+                backgroundColor: 'rgba(23, 74, 124, 0.08)',
+                fill: true,
+                tension: 0,
+                borderWidth: 3
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: { y: { min: 0, max: 100 } }
+        }
+    });
+}
+
+// ====== HISTÓRICO ======
+function renderHistoryTable() {
+    const termo = document.getElementById('search-history')?.value.toLowerCase() || '';
+    const tbody = document.getElementById('history-body');
+    if (!tbody) return;
+    
+    tbody.innerHTML = '';
+    
+    const sorted = [...appData.audits].sort((a,b) => b.data.localeCompare(a.data) || b.hora.localeCompare(a.hora));
+    
+    const filtrados = sorted.filter(a => {
+        return a.divisao.toLowerCase().includes(termo) || 
+               a.setor.toLowerCase().includes(termo) || 
+               a.auditor.toLowerCase().includes(termo) ||
+               (a.observacao && a.observacao.toLowerCase().includes(termo));
+    });
+    
+    if (filtrados.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;">Nenhum registro.</td></tr>';
+        return;
+    }
+    
+    filtrados.forEach(a => {
+        const dataFmt = formatarDataBR(a.data);
+        const isAcima = a.conformidade >= appData.config.metaLoja;
+        
+        tbody.innerHTML += `
+            <tr>
+                <td><strong>${dataFmt}</strong> ${a.hora}</td>
+                <td>${a.setor}</td>
+                <td>${a.divisao}</td>
+                <td>${a.previstos}</td>
+                <td>${a.encontrados}<br><small class="text-muted">P:${a.picking ?? '-'} D:${a.deposito ?? '-'} AV:${a.areaVendas ?? '-'}</small></td>
+                <td>${a.naoEncontrados}</td>
+                <td class="${isAcima ? 'text-success' : 'text-danger'}" style="font-weight:700;">${a.conformidade}%</td>
+                <td class="text-danger">${a.ruptura}%</td>
+                <td>${a.auditor}</td>
+                <td>
+                    <button class="btn-secondary btn-sm" onclick="duplicateAuditItem('${a.id}')">Duplicar</button>
+                    <button class="btn-danger btn-sm" onclick="deleteAuditItem('${a.id}')">Excluir</button>
+                </td>
+            </tr>
+        `;
+    });
+}
+
+
+function deleteAuditItem(id) {
+    // Criar modal de confirmação personalizado
+    const modalHTML = `
+        <div id="confirm-modal" class="modal" style="display: flex;">
+            <div class="modal-content" style="max-width: 400px; text-align: center;">
+                <h4 style="margin-bottom: 15px;">🗑️ Confirmar Exclusão</h4>
+                <p style="margin-bottom: 20px;">Tem certeza que deseja excluir este registro permanentemente?</p>
+                <div style="display: flex; gap: 10px; justify-content: center;">
+                    <button class="btn-secondary" onclick="fecharConfirmModal()">Cancelar</button>
+                    <button class="btn-danger" id="btn-confirmar-delete">Sim, Excluir</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Adicionar modal ao corpo
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+    
+    // Evento do botão confirmar
+    document.getElementById('btn-confirmar-delete').onclick = async function() {
+        fecharConfirmModal();
+        appData.audits = appData.audits.filter(a => a.id !== id);
+        saveToLocalStorage();
+        await deletarDaPlanilha(id);
+        renderHistoryTable();
+        showToast('Registro excluído com sucesso!', true);
+    };
+}
+
+function fecharConfirmModal() {
+    const modal = document.getElementById('confirm-modal');
+    if (modal) modal.remove();
+}
+
+// ====== DASHBOARD ======
+function populateFilterSelects() {
+    const fSetor = document.getElementById('filter-setor');
+    const fAuditor = document.getElementById('filter-auditor');
+    
+    if (fSetor) {
+        fSetor.innerHTML = '<option value="">Todos os Setores</option>';
+        appData.config.setores.forEach(s => fSetor.innerHTML += `<option value="${s}">${s}</option>`);
+    }
+    if (fAuditor) {
+        fAuditor.innerHTML = '<option value="">Todos os Auditores</option>';
+        appData.config.auditores.forEach(a => fAuditor.innerHTML += `<option value="${a}">${a}</option>`);
+    }
+}
+
+function applyFilters() {
+    const fMes = document.getElementById('filter-mes')?.value || '';
+    const fSetor = document.getElementById('filter-setor')?.value || '';
+    const fDivisao = document.getElementById('filter-divisao')?.value.toLowerCase() || '';
+    const fAuditor = document.getElementById('filter-auditor')?.value || '';
+    
+    const filtrados = appData.audits.filter(a => {
+        if (fMes && !a.data.startsWith(fMes)) return false;
+        if (fSetor && a.setor !== fSetor) return false;
+        if (fDivisao && !a.divisao.toLowerCase().includes(fDivisao)) return false;
+        if (fAuditor && a.auditor !== fAuditor) return false;
+        return true;
+    });
+    
+    renderDashboard(filtrados);
+}
+
+function renderDashboard(dados) {
+    document.getElementById('dash-total').innerText = dados.length;
+    
+    if (dados.length === 0) {
+        document.getElementById('dash-conformidade').innerText = "0%";
+        document.getElementById('dash-ruptura').innerText = "0%";
+        document.getElementById('dash-melhor').innerText = "0%";
+        document.getElementById('dash-pior').innerText = "0%";
+        destroyDashboardCharts();
+        return;
+    }
+    
+    let tPrev = 0, tEnc = 0, melhor = 0, pior = 100;
+    dados.forEach(a => {
+        tPrev += a.previstos;
+        tEnc += a.encontrados;
+        if (a.conformidade > melhor) melhor = a.conformidade;
+        if (a.conformidade < pior) pior = a.conformidade;
+    });
+    
+    document.getElementById('dash-conformidade').innerText = `${((tEnc/tPrev)*100).toFixed(1)}%`;
+    document.getElementById('dash-ruptura').innerText = `${(100 - (tEnc/tPrev)*100).toFixed(1)}%`;
+    document.getElementById('dash-melhor').innerText = `${melhor.toFixed(1)}%`;
+    document.getElementById('dash-pior').innerText = `${pior.toFixed(1)}%`;
+    
+    buildDashboardCharts(dados);
+}
+
+function destroyDashboardCharts() {
+    ['dashEvolucaoConf', 'dashEvolucaoRup', 'dashSetores', 'dashDivisoes', 'dashMeses', 'dashTendencia', 'dashLocalizacao'].forEach(id => {
+        if (charts[id]) charts[id].destroy();
+    });
+}
+
+function buildDashboardCharts(dados) {
+    destroyDashboardCharts();
+    
+    // Por data
+    const porData = {};
+    dados.forEach(a => {
+        if (!porData[a.data]) porData[a.data] = { prev: 0, enc: 0 };
+        porData[a.data].prev += a.previstos;
+        porData[a.data].enc += a.encontrados;
+    });
+    const datas = Object.keys(porData).sort();
+    const labels = datas.map(d => d.split('-').reverse().slice(0,2).join('/'));
+    const confs = datas.map(d => ((porData[d].enc/porData[d].prev)*100).toFixed(1));
+    const rups = confs.map(c => (100 - parseFloat(c)).toFixed(1));
+    
+    charts['dashEvolucaoConf'] = new Chart(document.getElementById('chartDashEvolucaoConf'), {
+        type: 'line', data: { labels, datasets: [{ label: 'Conformidade', data: confs, borderColor: '#28A745' }] },
+        options: { scales: { y: { min: 0, max: 100 } } }
+    });
+    
+    charts['dashEvolucaoRup'] = new Chart(document.getElementById('chartDashEvolucaoRup'), {
+        type: 'line', data: { labels, datasets: [{ label: 'Ruptura', data: rups, borderColor: '#DC3545' }] },
+        options: { scales: { y: { min: 0, max: 100 } } }
+    });
+    
+    // Por setor
+    const porSetor = {};
+    dados.forEach(a => {
+        if (!porSetor[a.setor]) porSetor[a.setor] = { prev: 0, enc: 0 };
+        porSetor[a.setor].prev += a.previstos;
+        porSetor[a.setor].enc += a.encontrados;
+    });
+    const setores = Object.keys(porSetor);
+    
+    charts['dashSetores'] = new Chart(document.getElementById('chartDashSetores'), {
+        type: 'bar', data: {
+            labels: setores,
+            datasets: [{ label: '%', data: setores.map(s => ((porSetor[s].enc/porSetor[s].prev)*100).toFixed(1)), backgroundColor: '#174A7C' }]
+        },
+        options: { scales: { y: { min: 0, max: 100 } } }
+    });
+    
+    // Por divisão
+    const porDiv = {};
+    dados.forEach(a => {
+        if (!porDiv[a.divisao]) porDiv[a.divisao] = { prev: 0, enc: 0 };
+        porDiv[a.divisao].prev += a.previstos;
+        porDiv[a.divisao].enc += a.encontrados;
+    });
+    const divs = Object.keys(porDiv).slice(0, 10);
+    
+    charts['dashDivisoes'] = new Chart(document.getElementById('chartDashDivisoes'), {
+        type: 'bar', data: {
+            labels: divs,
+            datasets: [{ label: '%', data: divs.map(d => ((porDiv[d].enc/porDiv[d].prev)*100).toFixed(1)), backgroundColor: '#2E75B6' }]
+        },
+        options: { indexAxis: 'y', scales: { x: { min: 0, max: 100 } } }
+    });
+    
+    // Por mês
+    const porMes = {};
+    dados.forEach(a => {
+        const m = a.data.substring(0, 7);
+        if (!porMes[m]) porMes[m] = { prev: 0, enc: 0 };
+        porMes[m].prev += a.previstos;
+        porMes[m].enc += a.encontrados;
+    });
+    const meses = Object.keys(porMes).sort();
+    
+    charts['dashMeses'] = new Chart(document.getElementById('chartDashMeses'), {
+        type: 'bar', data: {
+            labels: meses,
+            datasets: [{ label: '%', data: meses.map(m => ((porMes[m].enc/porMes[m].prev)*100).toFixed(1)), backgroundColor: '#FD7E14' }]
+        },
+        options: { scales: { y: { min: 0, max: 100 } } }
+    });
+    
+    // Tendência 30 dias
+    const hoje = new Date();
+    const dias30 = new Date(); dias30.setDate(hoje.getDate() - 30);
+    const recentes = dados.filter(a => new Date(a.data + 'T00:00:00') >= dias30);
+    const ag30 = {};
+    recentes.forEach(a => {
+        if (!ag30[a.data]) ag30[a.data] = { prev: 0, enc: 0 };
+        ag30[a.data].prev += a.previstos;
+        ag30[a.data].enc += a.encontrados;
+    });
+    const d30 = Object.keys(ag30).sort();
+    
+    charts['dashTendencia'] = new Chart(document.getElementById('chartDashTendencia'), {
+        type: 'line', data: {
+            labels: d30.map(d => d.split('-').reverse().slice(0,2).join('/')),
+            datasets: [{ label: 'Tendência', data: d30.map(d => ((ag30[d].enc/ag30[d].prev)*100).toFixed(1)), borderColor: '#174A7C', borderDash: [5,5] }]
+        },
+        options: { scales: { y: { min: 0, max: 100 } } }
+    });
+
+    // Onde os produtos foram encontrados
+    let totalPicking = 0, totalDeposito = 0, totalAreaVendas = 0, totalNaoEnc = 0;
+    dados.forEach(a => {
+        totalPicking += a.picking || 0;
+        totalDeposito += a.deposito || 0;
+        totalAreaVendas += a.areaVendas || 0;
+        totalNaoEnc += a.naoEncontrados || 0;
+    });
+
+    charts['dashLocalizacao'] = new Chart(document.getElementById('chartDashLocalizacao'), {
+        type: 'doughnut',
+        data: {
+            labels: ['Picking', 'Depósito', 'Área de Vendas', 'Não Encontrados'],
+            datasets: [{
+                data: [totalPicking, totalDeposito, totalAreaVendas, totalNaoEnc],
+                backgroundColor: ['#174A7C', '#2E75B6', '#28A745', '#DC3545']
+            }]
+        },
+        options: {
+            plugins: {
+                tooltip: {
+                    callbacks: {
+                        label: function(ctx) {
+                            const total = ctx.dataset.data.reduce((a, b) => a + b, 0);
+                            const val = ctx.parsed;
+                            const pct = total > 0 ? ((val / total) * 100).toFixed(1) : '0.0';
+                            return `${ctx.label}: ${val} (${pct}%)`;
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+// ====== ANÁLISES ======
+function generateSmartAnalysis() {
+    const listEl = document.getElementById('insights-list');
+    if (!listEl) return;
+    
+    if (appData.audits.length === 0) {
+        listEl.innerHTML = '<p class="text-muted">Nenhuma auditoria cadastrada.</p>';
+        return;
+    }
+    
+    // Cálculo dos insights (código simplificado)
+    const porSetor = {}, porDiv = {}, porDia = {};
+    appData.audits.forEach(a => {
+        if (!porSetor[a.setor]) porSetor[a.setor] = { prev: 0, enc: 0 };
+        porSetor[a.setor].prev += a.previstos;
+        porSetor[a.setor].enc += a.encontrados;
+        
+        if (!porDiv[a.divisao]) porDiv[a.divisao] = { prev: 0, enc: 0 };
+        porDiv[a.divisao].prev += a.previstos;
+        porDiv[a.divisao].enc += a.encontrados;
+        
+        if (!porDia[a.data]) porDia[a.data] = { prev: 0, enc: 0 };
+        porDia[a.data].prev += a.previstos;
+        porDia[a.data].enc += a.encontrados;
+    });
+    
+    let melhorSetor = '', piorSetor = '', valMelhor = -1, valPior = 101;
+    Object.keys(porSetor).forEach(s => {
+        const c = (porSetor[s].enc/porSetor[s].prev)*100;
+        if (c > valMelhor) { valMelhor = c; melhorSetor = s; }
+        if (c < valPior) { valPior = c; piorSetor = s; }
+    });
+    
+    let melhorDiv = '', piorDiv = '', vMelhor = -1, vPior = 101;
+    Object.keys(porDiv).forEach(d => {
+        const c = (porDiv[d].enc/porDiv[d].prev)*100;
+        if (c > vMelhor) { vMelhor = c; melhorDiv = d; }
+        if (c < vPior) { vPior = c; piorDiv = d; }
+    });
+    
+    let diasAcima = 0, diasAbaixo = 0, soma = 0;
+    Object.keys(porDia).forEach(d => {
+        const c = (porDia[d].enc/porDia[d].prev)*100;
+        soma += c;
+        c >= appData.config.metaLoja ? diasAcima++ : diasAbaixo++;
+    });
+    
+    listEl.innerHTML = `
+        <div class="insight-item positive">
+            <span>🎯 Melhor Setor: <strong>${melhorSetor}</strong></span>
+            <span class="insight-val text-success">${valMelhor.toFixed(1)}%</span>
+        </div>
+        <div class="insight-item negative">
+            <span>❌ Pior Setor: <strong>${piorSetor}</strong></span>
+            <span class="insight-val text-danger">${valPior.toFixed(1)}%</span>
+        </div>
+        <div class="insight-item positive">
+            <span>🏆 Melhor Divisão: <strong>${melhorDiv}</strong></span>
+            <span class="insight-val text-success">${vMelhor.toFixed(1)}%</span>
+        </div>
+        <div class="insight-item negative">
+            <span>⚠️ Pior Divisão: <strong>${piorDiv}</strong></span>
+            <span class="insight-val text-danger">${vPior.toFixed(1)}%</span>
+        </div>
+        <div class="insight-item neutral">
+            <span>📅 Dias acima da meta:</span>
+            <span class="insight-val">${diasAcima} dias</span>
+        </div>
+        <div class="insight-item negative">
+            <span>📉 Dias abaixo da meta:</span>
+            <span class="insight-val">${diasAbaixo} dias</span>
+        </div>
+        <div class="insight-item neutral">
+            <span>📊 Média diária:</span>
+                       <span class="insight-val">${(soma/Object.keys(porDia).length).toFixed(1)}%</span>
+        </div>
+    `;
+}
+
+// ====== CALENDÁRIO ======
+function changeCalendarMonth(direction) {
+    currentCalendarDate.setMonth(currentCalendarDate.getMonth() + direction);
+    renderCalendar();
+}
+
+function renderCalendar() {
+    const container = document.getElementById('calendar-days-container');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    const ano = currentCalendarDate.getFullYear();
+    const mes = currentCalendarDate.getMonth();
+    
+    const mesesNomes = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+        "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+    
+    document.getElementById('calendar-month-year').innerText = `${mesesNomes[mes]} de ${ano}`;
+    
+    const primeiroDia = new Date(ano, mes, 1).getDay();
+    const totalDias = new Date(ano, mes + 1, 0).getDate();
+    
+    for (let i = 0; i < primeiroDia; i++) {
+        container.innerHTML += '<div class="day-box empty"></div>';
+    }
+    
+    const auditoriasMes = appData.audits.filter(a => {
+        const d = new Date(a.data + 'T00:00:00');
+        return d.getFullYear() === ano && d.getMonth() === mes;
+    });
+    
+    const dadosDias = {};
+    auditoriasMes.forEach(a => {
+        const diaNum = parseInt(a.data.split('-')[2]);
+        if (!dadosDias[diaNum]) dadosDias[diaNum] = { prev: 0, enc: 0 };
+        dadosDias[diaNum].prev += a.previstos;
+        dadosDias[diaNum].enc += a.encontrados;
+    });
+    
+    for (let dia = 1; dia <= totalDias; dia++) {
+        let statusClass = '';
+        let infoTexto = '';
+        
+        if (dadosDias[dia]) {
+            const taxa = (dadosDias[dia].enc / dadosDias[dia].prev) * 100;
+            infoTexto = `${taxa.toFixed(1)}%`;
+            
+            if (taxa >= appData.config.metaLoja) statusClass = 'status-green';
+            else if (taxa >= 96.0) statusClass = 'status-yellow';
+            else statusClass = 'status-red';
+        }
+        
+        const dataISO = `${ano}-${String(mes+1).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
+        
+        container.innerHTML += `
+            <div class="day-box ${statusClass}" onclick="openCalendarDayDetails('${dataISO}')">
+                <span class="day-number">${dia}</span>
+                <span class="day-info">${infoTexto}</span>
+            </div>
+        `;
+    }
+}
+
+function openCalendarDayDetails(dataStr) {
+    const modal = document.getElementById('calendar-modal');
+    const body = document.getElementById('calendar-modal-body');
+    if (!modal || !body) return;
+    
+    const auditsDia = appData.audits.filter(a => a.data === dataStr);
+    const dataFmt = dataStr.split('-').reverse().join('/');
+    
+    body.innerHTML = `<h5>Dia ${dataFmt}</h5><hr style="margin:10px 0">`;
+    
+    if (auditsDia.length === 0) {
+        body.innerHTML += '<p class="text-muted">Nenhuma auditoria neste dia.</p>';
+    } else {
+        auditsDia.forEach(a => {
+            body.innerHTML += `
+                <div class="modal-item-detail">
+                    <strong>${a.setor} - ${a.divisao}</strong><br>
+                    Conformidade: ${a.conformidade}% | Auditor: ${a.auditor}<br>
+                    Obs: ${a.observacao || 'Nenhuma'}
+                </div>
+            `;
+        });
+    }
+    
+    modal.classList.remove('hidden');
+}
+
+function closeCalendarModal() {
+    const modal = document.getElementById('calendar-modal');
+    if (modal) modal.classList.add('hidden');
+}
+
+// Fechar modal clicando fora
+window.onclick = function(event) {
+    const modal = document.getElementById('calendar-modal');
+    if (event.target === modal) closeCalendarModal();
+};
+
+// ====== RELATÓRIO DE DIVISÕES ======
+function populateReportSetorOptions() {
+    const sel = document.getElementById('rel-setor');
+    if (!sel) return;
+    const valorAtual = sel.value;
+    sel.innerHTML = '<option value="">Todos os Setores</option>';
+    appData.config.setores.forEach(s => sel.innerHTML += `<option value="${s}">${s}</option>`);
+    sel.value = valorAtual;
+}
+
+function populateDivisaoFilterOptions() {
+    const selSetor = document.getElementById('rel-setor');
+    const selDivisao = document.getElementById('rel-divisao');
+    if (!selSetor || !selDivisao) return;
+
+    const setorEscolhido = selSetor.value;
+    const valorAtual = selDivisao.value;
+
+    const divisoes = [...new Set(
+        appData.audits
+            .filter(a => !setorEscolhido || a.setor === setorEscolhido)
+            .map(a => a.divisao)
+    )].sort((a, b) => a.localeCompare(b));
+
+    selDivisao.innerHTML = '<option value="">Selecione uma Divisão</option>';
+    divisoes.forEach(d => selDivisao.innerHTML += `<option value="${d}">${d}</option>`);
+
+    if (divisoes.includes(valorAtual)) selDivisao.value = valorAtual;
+}
+
+function limparFiltrosRelatorio() {
+    document.getElementById('rel-setor').value = '';
+    document.getElementById('rel-divisao').value = '';
+    document.getElementById('rel-data-inicio').value = '';
+    document.getElementById('rel-data-fim').value = '';
+    populateDivisaoFilterOptions();
+    gerarRelatorioDivisao();
+}
+
+function gerarRelatorioDivisao() {
+    const setor = document.getElementById('rel-setor')?.value || '';
+    const divisao = document.getElementById('rel-divisao')?.value || '';
+    const dataInicio = document.getElementById('rel-data-inicio')?.value || '';
+    const dataFim = document.getElementById('rel-data-fim')?.value || '';
+
+    const tbody = document.getElementById('relatorio-body');
+    const subtitulo = document.getElementById('rel-subtitulo');
+    if (!tbody) return;
+
+    let dados = [...appData.audits];
+    if (setor) dados = dados.filter(a => a.setor === setor);
+    if (divisao) dados = dados.filter(a => a.divisao === divisao);
+    if (dataInicio) dados = dados.filter(a => a.data >= dataInicio);
+    if (dataFim) dados = dados.filter(a => a.data <= dataFim);
+
+    dados.sort((a, b) => a.data.localeCompare(b.data) || a.hora.localeCompare(b.hora));
+
+    if (subtitulo) {
+        subtitulo.innerText = divisao
+            ? `Divisão: ${divisao}${setor ? ' | Setor: ' + setor : ''} — gerado em ${new Date().toLocaleDateString('pt-BR')}`
+            : `Todas as divisões${setor ? ' — Setor: ' + setor : ''} — gerado em ${new Date().toLocaleDateString('pt-BR')}`;
+    }
+
+    if (dados.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="11" style="text-align:center;">Nenhum dado para exibir.</td></tr>';
+        document.getElementById('rel-conformidade').innerText = '0%';
+        document.getElementById('rel-ruptura').innerText = '0%';
+        document.getElementById('rel-total').innerText = '0';
+        document.getElementById('rel-nao-encontrados').innerText = '0';
+        document.getElementById('rel-total-picking').innerText = '0';
+        document.getElementById('rel-total-deposito').innerText = '0';
+        document.getElementById('rel-total-areavendas').innerText = '0';
+        return;
+    }
+
+    let tPrev = 0, tEnc = 0, tNaoEnc = 0, tPicking = 0, tDeposito = 0, tAreaVendas = 0;
+    tbody.innerHTML = '';
+    dados.forEach(a => {
+        tPrev += a.previstos;
+        tEnc += a.encontrados;
+        tNaoEnc += a.naoEncontrados;
+        tPicking += a.picking || 0;
+        tDeposito += a.deposito || 0;
+        tAreaVendas += a.areaVendas || 0;
+        const dataFmt = formatarDataBR(a.data);
+        const isAcima = a.conformidade >= appData.config.metaLoja;
+
+        tbody.innerHTML += `
+            <tr>
+                <td><strong>${dataFmt}</strong></td>
+                <td>${a.setor}</td>
+                <td>${a.divisao}</td>
+                <td>${a.previstos}</td>
+                <td>${a.picking ?? '-'}</td>
+                <td>${a.deposito ?? '-'}</td>
+                <td>${a.areaVendas ?? '-'}</td>
+                <td class="text-danger">${a.naoEncontrados}</td>
+                <td class="${isAcima ? 'text-success' : 'text-danger'}" style="font-weight:700;">${a.conformidade}%</td>
+                <td class="text-danger">${a.ruptura}%</td>
+                <td>${a.observacao || '-'}</td>
+            </tr>
+        `;
+    });
+
+    const confMedia = tPrev > 0 ? ((tEnc / tPrev) * 100).toFixed(1) : '0.0';
+    const rupMedia = tPrev > 0 ? (100 - parseFloat(confMedia)).toFixed(1) : '0.0';
+
+    document.getElementById('rel-conformidade').innerText = `${confMedia}%`;
+    document.getElementById('rel-ruptura').innerText = `${rupMedia}%`;
+    document.getElementById('rel-total').innerText = dados.length;
+    document.getElementById('rel-nao-encontrados').innerText = tNaoEnc;
+    document.getElementById('rel-total-picking').innerText = tPicking;
+    document.getElementById('rel-total-deposito').innerText = tDeposito;
+    document.getElementById('rel-total-areavendas').innerText = tAreaVendas;
+}
+
+// ====== EXPORTAÇÃO CSV ======
+function exportToCSV() {
+    if (appData.audits.length === 0) {
+        showToast('Nenhum dado para exportar.', true);
+        return;
+    }
+    
+    let csv = '\uFEFFData;Hora;Setor;Divisao;Previstos;Picking;Deposito;AreaVendas;Encontrados;NaoEncontrados;Conformidade;Ruptura;Auditor;Observacao\n';
+    
+    appData.audits.forEach(a => {
+        csv += `${a.data};${a.hora};${a.setor};${a.divisao};${a.previstos};${a.picking ?? ''};${a.deposito ?? ''};${a.areaVendas ?? ''};${a.encontrados};${a.naoEncontrados};${a.conformidade};${a.ruptura};${a.auditor};${a.observacao || ''}\n`;
+    });
+    
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `AuditSort38_${new Date().toISOString().substring(0,10)}.csv`;
+    link.click();
+    showToast('Exportado com sucesso!');
+}
+
+// ====== BACKUP JSON ======
+function downloadJSONBackup() {
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(appData));
+    const link = document.createElement('a');
+    link.href = dataStr;
+    link.download = `Backup_AuditSort38_${new Date().toISOString().substring(0,10)}.json`;
+    link.click();
+    showToast('Backup baixado!');
+}
+
+function triggerImportFile() {
+    document.getElementById('file-import-json').click();
+}
+
+function importJSONBackup(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = async function(e) {
+        try {
+            const parsed = JSON.parse(e.target.result);
+            if (parsed.config && parsed.audits) {
+                appData = parsed;
+                saveToLocalStorage();
+                
+                if (USAR_GOOGLE_SHEETS && parsed.audits.length > 0) {
+                    await salvarNaPlanilha(parsed.audits);
+                }
+                
+                populateSelectOptions();
+                renderConfigLists();
+                updateGlobalMetrics();
+                showToast('Restaurado com sucesso!');
+            } else {
+                showToast('Arquivo inválido!', true);
+            }
+        } catch (err) {
+            showToast('Erro ao ler arquivo.', true);
+        }
+    };
+    reader.readAsText(file);
+}
+
+function resetAllApplicationData() {
+    const modalHTML = `
+        <div id="confirm-modal" class="modal" style="display: flex;">
+            <div class="modal-content" style="max-width: 450px; text-align: center;">
+                <h4 style="margin-bottom: 15px; color: #DC3545;">⚠️ ALERTA MÁXIMO</h4>
+                <p style="margin-bottom: 20px;">Isso apagará <strong>TODAS</strong> as auditorias e configurações permanentemente. Esta ação não pode ser desfeita!</p>
+                <div style="display: flex; gap: 10px; justify-content: center;">
+                    <button class="btn-secondary" onclick="fecharConfirmModal()">Cancelar</button>
+                    <button class="btn-danger" id="btn-confirmar-reset">Sim, Apagar Tudo</button>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    document.body.insertAdjacentHTML('beforeend', modalHTML);
+    
+    document.getElementById('btn-confirmar-reset').onclick = function() {
+        fecharConfirmModal();
+        localStorage.removeItem('auditsort38_v2_data');
+        location.reload();
+    };
+}
